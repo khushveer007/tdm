@@ -30,7 +30,7 @@ type Factory interface {
 	// It selects the appropriate protocol based on the URL scheme and
 	// protocol priorities. Options can be provided to customize the
 	// protocol behavior.
-	Create(ctx context.Context, rawURL string, opts ...protocol.Option) (protocol.Protocol, error)
+	Create(ctx context.Context, rawURL string, opts ...protocol.Option) (protocol.Protocol, *protocol.FileInfo, error)
 
 	// IsRegistered checks if a protocol type has been registered with the factory.
 	IsRegistered(protocol protocol.ProtocolType) bool
@@ -65,23 +65,21 @@ func (f *defaultFactory) Register(protocolType protocol.ProtocolType, builder Pr
 	return nil
 }
 
-func (f *defaultFactory) Create(ctx context.Context, rawURL string, opts ...protocol.Option) (protocol.Protocol, error) {
-	// Create default options
+func (f *defaultFactory) Create(ctx context.Context, rawURL string, opts ...protocol.Option) (protocol.Protocol, *protocol.FileInfo, error) {
 	downloadOpts := protocol.DownloadOptions{
 		Timeout:        f.options.DefaultTimeout,
-		RetryCount:     3, // default retry count
-		MaxConnections: 1, // default connection count
+		RetryCount:     3,
+		MaxConnections: 1,
 		Headers:        make(map[string]string),
 	}
 
-	// Apply all provided options
 	for _, opt := range opts {
 		opt(&downloadOpts)
 	}
 
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil || parsedURL.Scheme == "" {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidURL, err)
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidURL, err)
 	}
 
 	// Find all matching protocols
@@ -105,7 +103,7 @@ func (f *defaultFactory) Create(ctx context.Context, rawURL string, opts ...prot
 	})
 
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrUnsupportedProtocol, parsedURL.Scheme)
+		return nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedProtocol, parsedURL.Scheme)
 	}
 
 	// Sort by priority
@@ -123,11 +121,12 @@ func (f *defaultFactory) Create(ctx context.Context, rawURL string, opts ...prot
 		defer cancel()
 	}
 
-	if _, err := proto.Initialize(ctx, rawURL, downloadOpts); err != nil {
-		return nil, protocol.NewProtocolError(string(matches[0].proto), "Initialize", err)
+	fileInfo, err := proto.Initialize(ctx, rawURL, downloadOpts)
+	if err != nil {
+		return nil, nil, protocol.NewProtocolError(string(matches[0].proto), "Initialize", err)
 	}
 
-	return proto, nil
+	return proto, fileInfo, nil
 }
 
 func (f *defaultFactory) IsRegistered(protocolType protocol.ProtocolType) bool {
