@@ -51,8 +51,8 @@ func WithRetryCount(count int) Option {
 	}
 }
 
-func WithMaxConnections(max int) Option {
+func WithMaxConnections(maxConn int) Option {
 	return func(o *DownloadOptions) {
-		o.MaxConnections = max
+		o.MaxConnections = maxConn
 	}
 }

@@ -1,4 +1,20 @@
 linters-settings:
+  depguard:
+    rules:
+      main:
+        files:
+          - $all
+          - "!$test"
+        allow:
+          - $gostd
+          - github.com/NamanBalaji/tdm
+      test:
+        files:
+          - "$test"
+        allow:
+          - $gostd
+          - github.com/NamanBalaji/tdm
+          - github.com/stretchr/testify
   gocyclo:
     min-complexity: 15
   dupl:
@@ -22,12 +38,11 @@ linters:
   disable-all: true
   enable:
     - bodyclose
-    - deadcode
     - depguard
     - dogsled
     - dupl
     - errcheck
-    - exportloopref
+    - copyloopvar
     - gochecknoinits
     - goconst
     - gocritic
@@ -44,13 +59,11 @@ linters:
     - noctx
     - nolintlint
     - staticcheck
-    - structcheck
     - stylecheck
     - typecheck
     - unconvert
     - unparam
     - unused
-    - varcheck
     - whitespace
 
 run:
