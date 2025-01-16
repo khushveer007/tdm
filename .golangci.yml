@@ -1,0 +1,73 @@
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  dupl:
+    threshold: 100
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+  # Removing govet.check-shadowing — older schemas do not allow it:
+  govet: {}
+  # Removing nolintlint.requireExplanations / requireSpecificExplanation:
+  nolintlint: {}
+
+linters:
+  disable-all: true
+  enable:
+    - bodyclose
+    - deadcode
+    - depguard
+    - dogsled
+    - dupl
+    - errcheck
+    - exportloopref
+    - gochecknoinits
+    - goconst
+    - gocritic
+    - gocyclo
+    - gofmt
+    - goimports
+    - goprintffuncname
+    - gosec
+    - gosimple
+    - govet
+    - ineffassign
+    - misspell
+    - nakedret
+    - noctx
+    - nolintlint
+    - staticcheck
+    - structcheck
+    - stylecheck
+    - typecheck
+    - unconvert
+    - unparam
+    - unused
+    - varcheck
+    - whitespace
+
+run:
+  # Removing 'deadline' and 'skip-dirs' since schema complains about them.
+  issues-exit-code: 1
+  tests: true
+
+# Removing 'format' from output to avoid schema complaints:
+output:
+  print-issued-lines: true
+  print-linter-name: true
+
+issues:
+  exclude-rules:
+    - path: .*_test\.go$
+      linters:
+        - dupl
+        - gosec
+  max-issues-per-linter: 0
+  max-same-issues: 0
