@@ -9,7 +9,7 @@ type Protocol interface {
 	// Initialize fetches metadata, validates the URL, and prepares
 	// any resources needed for downloading. For example, in HTTP
 	// it might issue a HEAD request to get the file size.
-	Initialize(ctx context.Context, url string) (*FileInfo, error)
+	Initialize(ctx context.Context, url string, opts DownloadOptions) (*FileInfo, error)
 
 	// CreateDownloader provides a Downloader instance that can actually
 	// retrieve the data. Different protocols might implement chunking,
