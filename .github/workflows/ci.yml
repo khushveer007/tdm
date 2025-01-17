@@ -43,11 +43,13 @@ jobs:
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v4.0.1
         with:
-          file: ./coverage.txt
-          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Refresh Go Report Card
+        run: curl https://goreportcard.com/checks?url=https://github.com/NamanBalaji/tdm
 
   build:
     name: Build
