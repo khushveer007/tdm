@@ -8,20 +8,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestQueueProcessor_Basic ensures the queue processes items in priority order
 func TestQueueProcessor_PriorityAndBlocking(t *testing.T) {
-	// Use channels to control and observe execution flow
 	startCh := make(chan uuid.UUID, 10)
 
-	// Signal when a download can complete
 	var doneMu sync.Mutex
 	completeSignals := make(map[uuid.UUID]chan struct{})
 
-	// StartFn just signals that it started and waits for completion signal
 	startFn := func(id uuid.UUID) error {
 		startCh <- id
 
-		// Create a channel to wait on before this function returns
 		doneMu.Lock()
 		done := make(chan struct{})
 		completeSignals[id] = done
@@ -31,14 +26,11 @@ func TestQueueProcessor_PriorityAndBlocking(t *testing.T) {
 		return nil
 	}
 
-	// Create processor with max 1 concurrent download
 	qp := NewQueueProcessor(1, startFn)
 
-	// First, enqueue a low priority download
 	idLow := uuid.New()
 	qp.Enqueue(idLow, 1)
 
-	// Wait for it to start
 	var firstStarted uuid.UUID
 	select {
 	case firstStarted = <-startCh:
@@ -49,25 +41,20 @@ func TestQueueProcessor_PriorityAndBlocking(t *testing.T) {
 		t.Fatal("First download didn't start in time")
 	}
 
-	// Add a high priority download - it should be queued until first completes
 	idHigh := uuid.New()
 	qp.Enqueue(idHigh, 2)
 
-	// Verify the second download doesn't start yet (no slot available)
 	select {
 	case unexpected := <-startCh:
 		t.Fatalf("Unexpected download started before first completed: %v", unexpected)
 	case <-time.After(50 * time.Millisecond):
-		// This is expected - no second download should start yet
 	}
 
-	// Complete the first download
 	doneMu.Lock()
 	close(completeSignals[firstStarted])
 	delete(completeSignals, firstStarted)
 	doneMu.Unlock()
 
-	// Now the high priority download should start
 	select {
 	case secondStarted := <-startCh:
 		if secondStarted != idHigh {
@@ -77,7 +64,6 @@ func TestQueueProcessor_PriorityAndBlocking(t *testing.T) {
 		t.Fatal("Second download didn't start after first completed")
 	}
 
-	// Clean up
 	doneMu.Lock()
 	for id, ch := range completeSignals {
 		close(ch)
@@ -88,7 +74,6 @@ func TestQueueProcessor_PriorityAndBlocking(t *testing.T) {
 
 // TestQueueProcessor_MultipleConcurrent tests multiple concurrent downloads
 func TestQueueProcessor_MultipleConcurrent(t *testing.T) {
-	// Setup
 	startCh := make(chan uuid.UUID, 10)
 	var doneMu sync.Mutex
 	completeSignals := make(map[uuid.UUID]chan struct{})
@@ -105,24 +90,16 @@ func TestQueueProcessor_MultipleConcurrent(t *testing.T) {
 		return nil
 	}
 
-	// Create processor with max 2 concurrent downloads
 	qp := NewQueueProcessor(2, startFn)
 
-	// Create three downloads with different priorities
 	idLow := uuid.New()
 	idMed := uuid.New()
 	idHigh := uuid.New()
 
-	t.Logf("Low priority ID (1): %v", idLow)
-	t.Logf("Medium priority ID (2): %v", idMed)
-	t.Logf("High priority ID (3): %v", idHigh)
-
-	// Add all three downloads in sequence (explicitly not in priority order)
 	qp.Enqueue(idLow, 1)
 	qp.Enqueue(idMed, 2)
 	qp.Enqueue(idHigh, 3)
 
-	// The top two priorities should start (med and high)
 	started := make(map[uuid.UUID]bool)
 	for i := 0; i < 2; i++ {
 		select {
@@ -139,7 +116,6 @@ func TestQueueProcessor_MultipleConcurrent(t *testing.T) {
 		t.Errorf("Expected medium and high priority downloads to start")
 	}
 
-	// Verify no other downloads start yet
 	select {
 	case id := <-startCh:
 		t.Fatalf("Unexpected third download started: %v", id)
@@ -147,7 +123,6 @@ func TestQueueProcessor_MultipleConcurrent(t *testing.T) {
 		// This is expected
 	}
 
-	// Complete the high priority download
 	doneMu.Lock()
 	if ch, ok := completeSignals[idHigh]; ok {
 		close(ch)
@@ -155,7 +130,6 @@ func TestQueueProcessor_MultipleConcurrent(t *testing.T) {
 	}
 	doneMu.Unlock()
 
-	// Now the low priority should start
 	select {
 	case id := <-startCh:
 		if id != idLow {
