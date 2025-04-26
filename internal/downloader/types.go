@@ -5,41 +5,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/NamanBalaji/tdm/internal/common"
 	"github.com/google/uuid"
+
+	"github.com/NamanBalaji/tdm/internal/common"
+	"github.com/NamanBalaji/tdm/internal/protocol/http"
 )
 
-// Config contains all download configuration options
-type Config struct {
-	Directory string `json:"directory"` // Target directory
-
-	Connections int               `json:"connections"`       // Number of parallel connections
-	Headers     map[string]string `json:"headers,omitempty"` // Custom headers
-
-	MaxRetries int           `json:"max_retries"`           // Maximum number of retries
-	RetryDelay time.Duration `json:"retry_delay,omitempty"` // Delay between retries
-
-	ThrottleSpeed      int64 `json:"throttle_speed,omitempty"`      // Bandwidth throttle in bytes/sec
-	DisableParallelism bool  `json:"disable_parallelism,omitempty"` // Force single connection
-
-	Priority int `json:"priority"` // Priority level (higher = more important)
-
-	Checksum          string `json:"checksum,omitempty"`           // File checksum
-	ChecksumAlgorithm string `json:"checksum_algorithm,omitempty"` // Checksum algorithm
-
-	UseExistingFile bool `json:"use_existing_file,omitempty"` // Resume from existing file
-}
-
-// SpeedCalculator handles download speed measurement
+// SpeedCalculator handles download speed measurement.
 type SpeedCalculator struct {
-	samples        []int64   // Recent speed samples
-	lastCheck      time.Time // Time of last measurement
-	bytesSinceLast int64     // Bytes downloaded since last check
-	windowSize     int       // Number of samples to keep
+	samples        []int64
+	lastCheck      time.Time
+	bytesSinceLast int64
+	windowSize     int
 	mu             sync.Mutex
 }
 
-// NewSpeedCalculator creates a new speed calculator
+// NewSpeedCalculator creates a new speed calculator.
 func NewSpeedCalculator(windowSize int) *SpeedCalculator {
 	if windowSize <= 0 {
 		windowSize = 5
@@ -52,12 +33,12 @@ func NewSpeedCalculator(windowSize int) *SpeedCalculator {
 	}
 }
 
-// AddBytes records additional downloaded bytes
+// AddBytes records additional downloaded bytes.
 func (sc *SpeedCalculator) AddBytes(bytes int64) {
 	atomic.AddInt64(&sc.bytesSinceLast, bytes)
 }
 
-// GetSpeed calculates current download speed in bytes/sec
+// GetSpeed calculates the current download speed in bytes/sec.
 func (sc *SpeedCalculator) GetSpeed() int64 {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
@@ -84,7 +65,7 @@ func (sc *SpeedCalculator) GetSpeed() int64 {
 	return sc.getAverageSpeed()
 }
 
-// getAverageSpeed calculates average of recent speed samples
+// getAverageSpeed calculates the average of recent speed samples.
 func (sc *SpeedCalculator) getAverageSpeed() int64 {
 	if len(sc.samples) == 0 {
 		return 0
@@ -98,9 +79,10 @@ func (sc *SpeedCalculator) getAverageSpeed() int64 {
 	return sum / int64(len(sc.samples))
 }
 
-// Stats represents current download statistics
+// Stats represent current download statistics.
 type Stats struct {
 	ID              uuid.UUID
+	Filename        string
 	Status          common.Status
 	TotalSize       int64
 	Downloaded      int64
@@ -113,4 +95,17 @@ type Stats struct {
 	TotalChunks     int
 	Error           string
 	LastUpdated     time.Time
+}
+
+var retryableErrors = map[error]struct{}{
+	http.ErrNetworkProblem:  {},
+	http.ErrServerProblem:   {},
+	http.ErrTooManyRequests: {},
+	http.ErrTimeout:         {},
+}
+
+// isRetryableError checks if the error is in the retryable.
+func isRetryableError(err error) bool {
+	_, ok := retryableErrors[err]
+	return ok
 }

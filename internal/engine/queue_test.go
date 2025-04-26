@@ -1,268 +1,175 @@
-package engine_test
+package engine
 
 import (
-	"context"
-	"errors"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/NamanBalaji/tdm/internal/downloader"
-	"github.com/NamanBalaji/tdm/internal/engine"
 	"github.com/google/uuid"
 )
 
-func TestNoStartWhenZeroConcurrent(t *testing.T) {
+// TestQueueProcessor_Basic ensures the queue processes items in priority order
+func TestQueueProcessor_PriorityAndBlocking(t *testing.T) {
+	// Use channels to control and observe execution flow
 	startCh := make(chan uuid.UUID, 10)
-	startFn := func(ctx context.Context, d *downloader.Download) error {
-		startCh <- d.ID
-		<-ctx.Done()
-		return ctx.Err()
-	}
 
-	qp := engine.NewQueueProcessor(0, startFn)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	qp.Start(ctx)
+	// Signal when a download can complete
+	var doneMu sync.Mutex
+	completeSignals := make(map[uuid.UUID]chan struct{})
 
-	d := &downloader.Download{ID: uuid.New()}
-	qp.EnqueueDownload(d, 5)
+	// StartFn just signals that it started and waits for completion signal
+	startFn := func(id uuid.UUID) error {
+		startCh <- id
 
-	select {
-	case id := <-startCh:
-		t.Fatalf("unexpected start call for download %v with maxConcurrent 0", id)
-	case <-time.After(200 * time.Millisecond):
-		// Expected: no start event.
-	}
-	qp.Stop()
-}
+		// Create a channel to wait on before this function returns
+		doneMu.Lock()
+		done := make(chan struct{})
+		completeSignals[id] = done
+		doneMu.Unlock()
 
-func TestStartUpToConcurrent(t *testing.T) {
-	startCh := make(chan uuid.UUID, 10)
-	releaseCh := make(chan struct{})
-
-	startFn := func(ctx context.Context, d *downloader.Download) error {
-		startCh <- d.ID
-		<-releaseCh
+		<-done
 		return nil
 	}
 
-	qp := engine.NewQueueProcessor(2, startFn)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	qp.Start(ctx)
+	// Create processor with max 1 concurrent download
+	qp := NewQueueProcessor(1, startFn)
 
-	d1 := &downloader.Download{ID: uuid.New()}
-	d2 := &downloader.Download{ID: uuid.New()}
-	d3 := &downloader.Download{ID: uuid.New()}
+	// First, enqueue a low priority download
+	idLow := uuid.New()
+	qp.Enqueue(idLow, 1)
 
-	qp.EnqueueDownload(d1, 1)
-	qp.EnqueueDownload(d2, 3)
-	qp.EnqueueDownload(d3, 2)
-
-	startedIDs := make(map[uuid.UUID]struct{})
-	timeout := time.After(500 * time.Millisecond)
-	for i := 0; i < 2; i++ {
-		select {
-		case id := <-startCh:
-			startedIDs[id] = struct{}{}
-		case <-timeout:
-			t.Fatal("timeout waiting for active downloads to start")
-		}
-	}
-	expectedSet := map[uuid.UUID]struct{}{
-		d1.ID: {},
-		d2.ID: {},
-	}
-	if len(startedIDs) != len(expectedSet) {
-		t.Errorf("expected %d downloads to start, got %d", len(expectedSet), len(startedIDs))
-	}
-	for id := range expectedSet {
-		if _, ok := startedIDs[id]; !ok {
-			t.Errorf("expected download with ID %v to start, but it did not", id)
-		}
-	}
-	qp.NotifyDownloadCompletion(d1.ID)
-
-	var newStart uuid.UUID
+	// Wait for it to start
+	var firstStarted uuid.UUID
 	select {
-	case newStart = <-startCh:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("timeout waiting for queued download to start")
-	}
-	if newStart != d3.ID {
-		t.Errorf("expected queued download with ID %v to start, got %v", d3.ID, newStart)
+	case firstStarted = <-startCh:
+		if firstStarted != idLow {
+			t.Fatalf("Expected first download to be %v, got %v", idLow, firstStarted)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("First download didn't start in time")
 	}
 
-	close(releaseCh)
-	time.Sleep(100 * time.Millisecond)
-	qp.Stop()
+	// Add a high priority download - it should be queued until first completes
+	idHigh := uuid.New()
+	qp.Enqueue(idHigh, 2)
+
+	// Verify the second download doesn't start yet (no slot available)
+	select {
+	case unexpected := <-startCh:
+		t.Fatalf("Unexpected download started before first completed: %v", unexpected)
+	case <-time.After(50 * time.Millisecond):
+		// This is expected - no second download should start yet
+	}
+
+	// Complete the first download
+	doneMu.Lock()
+	close(completeSignals[firstStarted])
+	delete(completeSignals, firstStarted)
+	doneMu.Unlock()
+
+	// Now the high priority download should start
+	select {
+	case secondStarted := <-startCh:
+		if secondStarted != idHigh {
+			t.Fatalf("Expected high priority download %v to start, got %v", idHigh, secondStarted)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Second download didn't start after first completed")
+	}
+
+	// Clean up
+	doneMu.Lock()
+	for id, ch := range completeSignals {
+		close(ch)
+		delete(completeSignals, id)
+	}
+	doneMu.Unlock()
 }
 
-func TestErrorHandling(t *testing.T) {
-	calledCh := make(chan uuid.UUID, 10)
-	startFn := func(ctx context.Context, d *downloader.Download) error {
-		calledCh <- d.ID
-		return errors.New("simulated error")
-	}
-
-	qp := engine.NewQueueProcessor(1, startFn)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	qp.Start(ctx)
-	defer qp.Stop()
-
-	d1 := &downloader.Download{ID: uuid.New()}
-	qp.EnqueueDownload(d1, 1)
-	select {
-	case id := <-calledCh:
-		if id != d1.ID {
-			t.Errorf("expected d1 to be started, got %v", id)
-		}
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("start function was not called for d1")
-	}
-
-	d2 := &downloader.Download{ID: uuid.New()}
-	qp.EnqueueDownload(d2, 2)
-	select {
-	case id := <-calledCh:
-		if id != d2.ID {
-			t.Errorf("expected d2 to be started next, got %v", id)
-		}
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("start function was not called for d2")
-	}
-}
-
-func TestStopPreventsNewStarts(t *testing.T) {
+// TestQueueProcessor_MultipleConcurrent tests multiple concurrent downloads
+func TestQueueProcessor_MultipleConcurrent(t *testing.T) {
+	// Setup
 	startCh := make(chan uuid.UUID, 10)
-	startFn := func(ctx context.Context, d *downloader.Download) error {
-		startCh <- d.ID
-		<-ctx.Done()
-		return ctx.Err()
-	}
+	var doneMu sync.Mutex
+	completeSignals := make(map[uuid.UUID]chan struct{})
 
-	qp := engine.NewQueueProcessor(1, startFn)
-	ctx, cancel := context.WithCancel(context.Background())
-	qp.Start(ctx)
+	startFn := func(id uuid.UUID) error {
+		startCh <- id
 
-	d1 := &downloader.Download{ID: uuid.New()}
-	qp.EnqueueDownload(d1, 1)
-	select {
-	case <-startCh:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected first download to start")
-	}
+		doneMu.Lock()
+		done := make(chan struct{})
+		completeSignals[id] = done
+		doneMu.Unlock()
 
-	qp.Stop()
-
-	d2 := &downloader.Download{ID: uuid.New()}
-	qp.EnqueueDownload(d2, 2)
-	select {
-	case id := <-startCh:
-		t.Fatalf("unexpected start call for download %v after Stop", id)
-	case <-time.After(200 * time.Millisecond):
-		// Expected: no start event.
-	}
-	cancel()
-}
-
-func TestContextCancellation(t *testing.T) {
-	// Updated start function: if the context is already cancelled, do not send the start event.
-	startCh := make(chan uuid.UUID, 10)
-	startFn := func(ctx context.Context, d *downloader.Download) error {
-		// Check if context is already cancelled.
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		startCh <- d.ID
-		<-ctx.Done()
-		return ctx.Err()
-	}
-
-	qp := engine.NewQueueProcessor(1, startFn)
-	ctx, cancel := context.WithCancel(context.Background())
-	qp.Start(ctx)
-
-	d := &downloader.Download{ID: uuid.New()}
-	qp.EnqueueDownload(d, 1)
-	select {
-	case <-startCh:
-		// d starts before cancellation.
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected download to start")
-	}
-
-	cancel()
-
-	// Enqueue a new download after cancellation.
-	d2 := &downloader.Download{ID: uuid.New()}
-	qp.EnqueueDownload(d2, 2)
-	// Since context is cancelled, startFn should detect this and not send d2's ID.
-	select {
-	case id := <-startCh:
-		t.Fatalf("unexpected start call for download %v after context cancellation", id)
-	case <-time.After(200 * time.Millisecond):
-		// Expected: no start event.
-	}
-	qp.Stop()
-}
-
-func TestPrioritySorting(t *testing.T) {
-	startCh := make(chan uuid.UUID, 10)
-	releaseCh := make(chan struct{})
-
-	startFn := func(ctx context.Context, d *downloader.Download) error {
-		startCh <- d.ID
-		<-releaseCh
+		<-done
 		return nil
 	}
 
-	qp := engine.NewQueueProcessor(2, startFn)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	qp.Start(ctx)
+	// Create processor with max 2 concurrent downloads
+	qp := NewQueueProcessor(2, startFn)
 
-	d1 := &downloader.Download{ID: uuid.New()}
-	d2 := &downloader.Download{ID: uuid.New()}
-	qp.EnqueueDownload(d1, 1)
-	qp.EnqueueDownload(d2, 3)
+	// Create three downloads with different priorities
+	idLow := uuid.New()
+	idMed := uuid.New()
+	idHigh := uuid.New()
 
-	startedSet := make(map[uuid.UUID]struct{})
+	t.Logf("Low priority ID (1): %v", idLow)
+	t.Logf("Medium priority ID (2): %v", idMed)
+	t.Logf("High priority ID (3): %v", idHigh)
+
+	// Add all three downloads in sequence (explicitly not in priority order)
+	qp.Enqueue(idLow, 1)
+	qp.Enqueue(idMed, 2)
+	qp.Enqueue(idHigh, 3)
+
+	// The top two priorities should start (med and high)
+	started := make(map[uuid.UUID]bool)
 	for i := 0; i < 2; i++ {
 		select {
 		case id := <-startCh:
-			startedSet[id] = struct{}{}
-		case <-time.After(500 * time.Millisecond):
-			t.Fatal("timeout waiting for downloads to start")
-		}
-	}
-	expectedSet := map[uuid.UUID]struct{}{
-		d1.ID: {},
-		d2.ID: {},
-	}
-	if len(startedSet) != len(expectedSet) {
-		t.Errorf("expected %d downloads to start, got %d", len(expectedSet), len(startedSet))
-	}
-	for id := range expectedSet {
-		if _, ok := startedSet[id]; !ok {
-			t.Errorf("expected download with ID %v to have started, but it did not", id)
+			started[id] = true
+		case <-time.After(100 * time.Millisecond):
+			t.Fatalf("Didn't get %d started downloads in time", 2)
 		}
 	}
 
-	d3 := &downloader.Download{ID: uuid.New()}
-	qp.EnqueueDownload(d3, 2)
-	qp.NotifyDownloadCompletion(d1.ID)
-	var newStart uuid.UUID
+	// Verify which ones started
+	if !started[idMed] || !started[idHigh] {
+		t.Logf("Started downloads: %v", started)
+		t.Errorf("Expected medium and high priority downloads to start")
+	}
+
+	// Verify no other downloads start yet
 	select {
-	case newStart = <-startCh:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("timeout waiting for queued download to start")
+	case id := <-startCh:
+		t.Fatalf("Unexpected third download started: %v", id)
+	case <-time.After(50 * time.Millisecond):
+		// This is expected
 	}
-	if newStart != d3.ID {
-		t.Errorf("expected queued download with ID %v to start, got %v", d3.ID, newStart)
+
+	// Complete the high priority download
+	doneMu.Lock()
+	if ch, ok := completeSignals[idHigh]; ok {
+		close(ch)
+		delete(completeSignals, idHigh)
 	}
-	close(releaseCh)
-	time.Sleep(100 * time.Millisecond)
-	qp.Stop()
+	doneMu.Unlock()
+
+	// Now the low priority should start
+	select {
+	case id := <-startCh:
+		if id != idLow {
+			t.Fatalf("Expected low priority download to start, got %v", id)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Low priority download didn't start after slot freed")
+	}
+
+	// Clean up
+	doneMu.Lock()
+	for id, ch := range completeSignals {
+		close(ch)
+		delete(completeSignals, id)
+	}
+	doneMu.Unlock()
 }
