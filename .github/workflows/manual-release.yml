@@ -47,7 +47,7 @@ jobs:
       - name: Build binary
         run: |
           GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} \
-            go build -o "${{ env.OUTPUT }}" ./cmd
+            go build -o "${{ env.OUTPUT }}" .
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
