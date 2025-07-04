@@ -2,114 +2,159 @@ package engine
 
 import (
 	"container/heap"
+	"context"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/NamanBalaji/tdm/internal/logger"
+	"github.com/NamanBalaji/tdm/internal/worker"
 )
 
-// DownloadItem wraps a download ID with its priority for the heap.
-type DownloadItem struct {
-	ID       uuid.UUID
-	Priority int
-	index    int // heap index
+// queueItem wraps a Worker so it can live inside a heap.
+type queueItem struct {
+	worker  worker.Worker
+	addedAt time.Time
+	index   int
 }
 
-// downloadHeap implements heap.Interface as a max-heap by Priority.
-type downloadHeap []*DownloadItem
+type PriorityQueue struct {
+	mu            sync.RWMutex
+	items         []*queueItem       // the heap
+	lookup        map[uuid.UUID]int  // workerID → heap index (or -1 if gone)
+	active        map[uuid.UUID]bool // workers currently started
+	maxConcurrent int
+}
 
-func (h downloadHeap) Len() int           { return len(h) }
-func (h downloadHeap) Less(i, j int) bool { return h[i].Priority > h[j].Priority }
-func (h downloadHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-	h[i].index, h[j].index = i, j
+// NewPriorityQueue returns an empty queue that will allow at most
+func NewPriorityQueue(maxConcurrent int) *PriorityQueue {
+	pq := &PriorityQueue{
+		items:         make([]*queueItem, 0),
+		lookup:        make(map[uuid.UUID]int),
+		active:        make(map[uuid.UUID]bool),
+		maxConcurrent: maxConcurrent,
+	}
+	heap.Init(pq)
+	return pq
 }
-func (h *downloadHeap) Push(x any) {
-	item := x.(*DownloadItem)
-	item.index = len(*h)
-	*h = append(*h, item)
+
+func (pq *PriorityQueue) Len() int { return len(pq.items) }
+
+func (pq *PriorityQueue) Less(i, j int) bool {
+	pi, pj := pq.items[i].worker.GetPriority(), pq.items[j].worker.GetPriority()
+	if pi != pj {
+		return pi > pj
+	}
+
+	return pq.items[i].addedAt.Before(pq.items[j].addedAt)
 }
-func (h *downloadHeap) Pop() any {
-	old := *h
-	n := len(old)
-	item := old[n-1]
+
+func (pq *PriorityQueue) Swap(i, j int) {
+	pq.items[i], pq.items[j] = pq.items[j], pq.items[i]
+	pq.items[i].index = i
+	pq.items[j].index = j
+	pq.lookup[pq.items[i].worker.GetID()] = i
+	pq.lookup[pq.items[j].worker.GetID()] = j
+}
+
+func (pq *PriorityQueue) Push(x any) {
+	item := x.(*queueItem)
+	item.index = len(pq.items)
+	pq.items = append(pq.items, item)
+	pq.lookup[item.worker.GetID()] = item.index
+}
+
+func (pq *PriorityQueue) Pop() any {
+	n := len(pq.items) - 1
+	item := pq.items[n]
+	pq.items[n] = nil
+	pq.items = pq.items[:n]
+	delete(pq.lookup, item.worker.GetID())
 	item.index = -1
-	*h = old[:n-1]
 	return item
 }
 
-// QueueProcessor manages prioritized downloads up to maxConcurrent.
-type QueueProcessor struct {
-	mu            sync.Mutex
-	cond          *sync.Cond
-	heap          downloadHeap
-	startFn       func(uuid.UUID) error
-	maxConcurrent int
-	activeCount   int
-	active        map[uuid.UUID]struct{}
-}
-
-// NewQueueProcessor creates and starts the processor loop.
-func NewQueueProcessor(maxConcurrent int, startFn func(uuid.UUID) error) *QueueProcessor {
-	qp := &QueueProcessor{
-		heap:          make(downloadHeap, 0),
-		startFn:       startFn,
-		maxConcurrent: maxConcurrent,
-		active:        make(map[uuid.UUID]struct{}),
-	}
-	qp.cond = sync.NewCond(&qp.mu)
-
-	heap.Init(&qp.heap)
-
-	go qp.dispatchLoop()
-	return qp
-}
-
-// Enqueue adds a download ID with its priority into the queue.
-func (q *QueueProcessor) Enqueue(id uuid.UUID, priority int) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if _, exists := q.active[id]; exists {
-		logger.Infof("Download %s already active, not enqueuing", id)
+func (pq *PriorityQueue) Add(ctx context.Context, w worker.Worker) {
+	pq.mu.Lock()
+	if _, already := pq.lookup[w.GetID()]; already {
+		pq.mu.Unlock()
 		return
 	}
+	heap.Push(pq, &queueItem{worker: w, addedAt: time.Now()})
+	pq.mu.Unlock()
 
-	item := &DownloadItem{ID: id, Priority: priority}
-	heap.Push(&q.heap, item)
-	logger.Infof("Enqueued download %s (priority %d)", id, priority)
-	q.cond.Signal()
+	w.Queue()
+
+	pq.process(ctx)
 }
 
-// dispatchLoop pops items when slots free up and starts the workers.
-func (q *QueueProcessor) dispatchLoop() {
-	for {
-		q.mu.Lock()
-		for q.activeCount >= q.maxConcurrent || len(q.heap) == 0 {
-			q.cond.Wait()
+func (pq *PriorityQueue) Remove(ctx context.Context, w worker.Worker) {
+	pq.mu.Lock()
+	idx, ok := pq.lookup[w.GetID()]
+	if !ok {
+		pq.mu.Unlock()
+		return
+	}
+	heap.Remove(pq, idx)
+
+	delete(pq.active, w.GetID())
+
+	if idx, ok := pq.lookup[w.GetID()]; ok {
+		heap.Remove(pq, idx)
+		delete(pq.lookup, w.GetID())
+	}
+	pq.mu.Unlock()
+
+	pq.process(ctx)
+}
+
+func (pq *PriorityQueue) process(ctx context.Context) {
+	var toStart []worker.Worker
+	var toPause []worker.Worker
+
+	pq.mu.Lock()
+
+	itemsCopy := make([]*queueItem, len(pq.items))
+	copy(itemsCopy, pq.items)
+	sort.Slice(itemsCopy, func(i, j int) bool { // same rule as Less()
+		pi, pj := itemsCopy[i].worker.GetPriority(), itemsCopy[j].worker.GetPriority()
+		if pi != pj {
+			return pi > pj
 		}
+		return itemsCopy[i].addedAt.Before(itemsCopy[j].addedAt)
+	})
+	if len(itemsCopy) > pq.maxConcurrent {
+		itemsCopy = itemsCopy[:pq.maxConcurrent]
+	}
 
-		item := heap.Pop(&q.heap).(*DownloadItem)
+	newActive := make(map[uuid.UUID]bool, pq.maxConcurrent)
+	for _, item := range itemsCopy {
+		id := item.worker.GetID()
+		newActive[id] = true
+		if !pq.active[id] {
+			toStart = append(toStart, item.worker)
+		}
+	}
 
-		q.activeCount++
-		q.active[item.ID] = struct{}{}
-
-		id := item.ID
-		q.mu.Unlock()
-
-		go func(downloadID uuid.UUID) {
-			logger.Infof("Starting download %s", downloadID)
-			err := q.startFn(downloadID)
-			if err != nil {
-				logger.Errorf("Failed to start download %s: %v", downloadID, err)
+	for id := range pq.active {
+		if !newActive[id] {
+			if idx, ok := pq.lookup[id]; ok && idx >= 0 && idx < len(pq.items) {
+				toPause = append(toPause, pq.items[idx].worker)
 			}
+		}
+	}
 
-			q.mu.Lock()
-			q.activeCount--
-			delete(q.active, downloadID)
-			q.cond.Signal()
-			q.mu.Unlock()
-		}(id)
+	pq.active = newActive
+
+	pq.mu.Unlock()
+
+	for _, w := range toStart {
+		_ = w.Start(ctx)
+	}
+
+	for _, w := range toPause {
+		_ = w.Pause()
+		w.Queue()
 	}
 }

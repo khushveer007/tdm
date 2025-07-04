@@ -1,36 +1,59 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/NamanBalaji/tdm/internal/engine"
 	"github.com/NamanBalaji/tdm/internal/logger"
+	"github.com/NamanBalaji/tdm/internal/repository"
 	"github.com/NamanBalaji/tdm/internal/tui"
 )
 
 func main() {
-	config := engine.DefaultConfig()
-
-	debug := flag.Bool("debug", false, "debug flag")
+	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
 
-	if err := logger.InitLogging(*debug, config.ConfigDir+"/tdm.log"); err != nil {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Printf("Error getting home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	configDir := filepath.Join(homeDir, ".tdm")
+
+	err = os.MkdirAll(configDir, 0o755)
+	if err != nil {
+		fmt.Printf("Error creating config directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	err = logger.InitLogging(*debug, filepath.Join(configDir, "tdm.log"))
+	if err != nil {
 		fmt.Printf("Warning: Failed to initialize logging: %v\n", err)
 	}
 	defer logger.Close()
 
-	eng, err := engine.New(config)
+	repo, err := repository.NewBboltRepository(filepath.Join(configDir, "tdm.db"))
 	if err != nil {
-		logger.Errorf("Error creating engine: %v\n", err)
+		logger.Errorf("Error creating repository: %v\n", err)
 		os.Exit(1)
 	}
 
-	if err := eng.Init(); err != nil {
-		logger.Errorf("Error initializing engine: %v\n", err)
+	eng := engine.NewEngine(repo, 2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = eng.Start(ctx)
+	if err != nil {
+		logger.Errorf("Error starting engine: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -40,22 +63,24 @@ func main() {
 	go func() {
 		<-sigChan
 		logger.Infof("\nReceived interrupt signal, shutting down...")
-		if err := eng.Shutdown(); err != nil {
-			fmt.Printf("Error during shutdown: %v\n", err)
-		}
-		os.Exit(0)
+		cancel()
 	}()
 
-	if err := tui.Run(eng); err != nil {
-		fmt.Printf("Error running TUI: %v\n", err)
-		if err := eng.Shutdown(); err != nil {
-			fmt.Printf("Error during shutdown: %v\n", err)
-		}
-		os.Exit(1)
+	err = tui.Run(ctx, eng)
+	if err != nil {
+		fmt.Printf("TUI Error: %v\n", err)
 	}
 
-	if err := eng.Shutdown(); err != nil {
-		fmt.Printf("Error during shutdown: %v\n", err)
-		os.Exit(1)
+	logger.Infof("TUI has exited. Shutting down engine...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	err = eng.Shutdown(shutdownCtx)
+	if err != nil {
+		logger.Errorf("Error during engine shutdown: %v", err)
 	}
+
+	eng.Wait()
+	logger.Infof("Shutdown complete.")
 }
