@@ -2,8 +2,10 @@ package tui
 
 import (
 	"context"
-	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/google/uuid"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/NamanBalaji/tdm/internal/engine"
 )
@@ -16,6 +18,22 @@ func Run(ctx context.Context, eng *engine.Engine) error {
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case err, ok := <-eng.GetErrors():
+				if !ok {
+					return
+				}
+
+				p.Send(downloadErrMsg{err.Error})
+			}
+		}
+	}()
+
 	_, err := p.Run()
 
 	return err

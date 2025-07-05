@@ -11,21 +11,26 @@ func RenderDownloadList(downloads []engine.DownloadInfo, selected int, width, he
 	if len(downloads) == 0 {
 		return renderEmptyView(width, height)
 	}
+
 	if height <= 0 {
 		return lipgloss.NewStyle().Width(width).Height(height).Render("")
 	}
 
 	var rows []string
+
 	itemHeight := 4
 
 	visibleCount := height / itemHeight
+
 	start := selected - (visibleCount / 2)
 	if start < 0 {
 		start = 0
 	}
+
 	end := start + visibleCount
 	if end > len(downloads) {
 		end = len(downloads)
+
 		start = end - visibleCount
 		if start < 0 {
 			start = 0
@@ -57,7 +62,7 @@ func renderEmptyView(width, height int) string {
 		styles.Peach, styles.Yellow, styles.Green,
 	}
 
-	var lines []string
+	lines := make([]string, 0, len(logo))
 
 	for i, line := range logo {
 		styled := lipgloss.NewStyle().Foreground(colors[i]).Render(line)
@@ -65,9 +70,8 @@ func renderEmptyView(width, height int) string {
 	}
 
 	subtitle := lipgloss.NewStyle().Foreground(styles.Text).Italic(true).Render("Terminal Download Manager")
-	instruction := lipgloss.NewStyle().Foreground(styles.Subtext0).Render("Press 'a' to add a download or 'q' to quit")
 	content := lipgloss.JoinVertical(lipgloss.Center, lines...)
-	content = lipgloss.JoinVertical(lipgloss.Center, content, "", subtitle, "", instruction)
+	content = lipgloss.JoinVertical(lipgloss.Center, content, "", subtitle)
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
 }
