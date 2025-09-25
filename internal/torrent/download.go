@@ -3,6 +3,7 @@ package torrent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"github.com/NamanBalaji/tdm/internal/status"
 	torrentPkg "github.com/NamanBalaji/tdm/pkg/torrent"
 )
+
+var ErrNilClient = errors.New("torrent client is nil")
 
 // Download represents a torrent download's persistent data.
 type Download struct {
@@ -48,25 +51,19 @@ func NewDownload(ctx context.Context, client *torrentPkg.Client, url string, isM
 		Protocol: "torrent",
 	}
 
-	mi, err := download.GetMetainfo(ctx, client)
+	if client == nil {
+		return nil, ErrNilClient
+	}
+
+	th, err := client.GetTorrentHandler(ctx, download.Url, download.IsMagnet)
 	if err != nil {
 		return nil, err
 	}
+	defer th.Drop()
 
-	info, err := mi.UnmarshalInfo()
-	if err != nil {
-		return nil, err
-	}
-
-	t, err := client.AddTorrent(mi)
-	if err != nil {
-		return nil, err
-	}
-	defer t.Drop()
-
-	download.Name = info.Name
-	download.TotalSize = info.TotalLength()
-	download.InfoHash = t.InfoHash().HexString()
+	download.Name = th.Name()
+	download.InfoHash = th.InfoHash().HexString()
+	download.TotalSize = th.Length()
 
 	return download, nil
 }
@@ -128,14 +125,24 @@ func (d *Download) UpdateProgress(downloaded, uploaded int64) {
 	d.Uploaded = uploaded
 }
 
+func (d *Download) getUrl() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	return d.Url
+}
+
+func (d *Download) isMagnet() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	return d.IsMagnet
+}
+
 // GetMetainfo returns the metainfo.
 func (d *Download) GetMetainfo(ctx context.Context, client *torrentPkg.Client) (*metainfo.MetaInfo, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
-	if d.IsMagnet {
-		return client.GetMetainfoFromMagnet(ctx, d.Url)
-	}
 
 	return torrentPkg.GetMetainfo(d.Url)
 }
