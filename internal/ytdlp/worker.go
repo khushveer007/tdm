@@ -42,6 +42,7 @@ type Worker struct {
 	done     chan error
 	started  atomic.Bool
 	finished atomic.Bool
+	skipSave atomic.Bool
 
 	cancel   context.CancelFunc
 	cancelMu sync.Mutex
@@ -404,6 +405,8 @@ func (w *Worker) stop(s status.Status, remove bool) error {
 }
 
 func (w *Worker) cleanupFiles() {
+	w.skipSave.Store(true)
+
 	path := w.download.getPath()
 	if path != "" {
 		_ = os.Remove(path)
@@ -426,7 +429,7 @@ func (w *Worker) finish(err error) {
 			cancel()
 		}
 
-		if w.repo != nil {
+		if w.repo != nil && !w.skipSave.Load() {
 			if saveErr := w.repo.Save(w.download); saveErr != nil {
 				logger.Errorf("failed to save download: %v", saveErr)
 			}
@@ -481,7 +484,7 @@ func (w *Worker) saveState(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if w.repo != nil {
+			if w.repo != nil && !w.skipSave.Load() {
 				if err := w.repo.Save(w.download); err != nil {
 					logger.Errorf("failed to persist yt-dlp download: %v", err)
 				}
