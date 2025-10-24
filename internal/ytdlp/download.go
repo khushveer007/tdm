@@ -47,23 +47,36 @@ func NewDownload(url, dir string, priority int) *Download {
 
 // MarshalJSON implements json.Marshaler ensuring atomic fields are captured safely.
 func (d *Download) MarshalJSON() ([]byte, error) {
+	type downloadJSON struct {
+		ID         uuid.UUID     `json:"id"`
+		URL        string        `json:"url"`
+		Dir        string        `json:"dir"`
+		Path       string        `json:"path"`
+		Status     status.Status `json:"status"`
+		Priority   int           `json:"priority"`
+		TotalSize  int64         `json:"totalSize"`
+		Downloaded int64         `json:"downloaded"`
+		CreatedAt  time.Time     `json:"createdAt"`
+		UpdatedAt  time.Time     `json:"updatedAt"`
+	}
+
 	d.mu.RLock()
-	defer d.mu.RUnlock()
+	dto := downloadJSON{
+		ID:        d.ID,
+		URL:       d.URL,
+		Dir:       d.Dir,
+		Path:      d.Path,
+		Priority:  d.Priority,
+		CreatedAt: d.CreatedAt,
+		UpdatedAt: d.UpdatedAt,
+	}
+	d.mu.RUnlock()
 
-	type Alias Download
+	dto.Status = d.getStatus()
+	dto.TotalSize = d.getTotalSize()
+	dto.Downloaded = d.getDownloaded()
 
-	return json.Marshal(&struct {
-		*Alias
-
-		Status     int32 `json:"status"`
-		TotalSize  int64 `json:"totalSize"`
-		Downloaded int64 `json:"downloaded"`
-	}{
-		Alias:      (*Alias)(d),
-		Status:     d.getStatus(),
-		TotalSize:  d.getTotalSize(),
-		Downloaded: d.getDownloaded(),
-	})
+	return json.Marshal(dto)
 }
 
 // Type returns the repository type label for yt-dlp downloads.
