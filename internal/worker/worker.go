@@ -14,10 +14,14 @@ import (
 	"github.com/NamanBalaji/tdm/internal/repository"
 	"github.com/NamanBalaji/tdm/internal/status"
 	"github.com/NamanBalaji/tdm/internal/torrent"
+	"github.com/NamanBalaji/tdm/internal/ytdlp"
 	torrentPkg "github.com/NamanBalaji/tdm/pkg/torrent"
 )
 
-var ErrUnsupportedScheme = errors.New("unsupported scheme")
+var (
+	ErrUnsupportedScheme = errors.New("unsupported scheme")
+	ErrNilRepository     = errors.New("nil repository")
+)
 
 // Worker defines the interface for a worker that can perform downloads.
 type Worker interface {
@@ -36,6 +40,10 @@ type Worker interface {
 
 // GetWorker returns a worker based on the URL scheme.
 func GetWorker(ctx context.Context, cfg *config.Config, urlStr string, priority int, torrentClient *torrentPkg.Client, repo *repository.BboltRepository) (Worker, error) {
+	if repo == nil {
+		return nil, ErrNilRepository
+	}
+
 	u, err := url.Parse(urlStr)
 	if err != nil {
 		return nil, err
@@ -45,6 +53,10 @@ func GetWorker(ctx context.Context, cfg *config.Config, urlStr string, priority 
 	case "http", "https":
 		if torrentPkg.HasTorrentFile(urlStr) {
 			return torrent.New(ctx, nil, urlStr, false, cfg.Torrent.DownloadDir, torrentClient, repo, priority)
+		}
+
+		if cfg.Ytdlp != nil && ytdlp.CanHandle(urlStr) {
+			return ytdlp.New(ctx, cfg.Ytdlp, urlStr, nil, repo, priority)
 		}
 
 		if http.CanHandle(urlStr) {
@@ -89,6 +101,20 @@ func LoadWorker(ctx context.Context, cfg *config.Config, download repository.Obj
 		}
 
 		return torrent.New(ctx, &d, d.Url, d.IsMagnet, d.Dir, torrentClient, repo, d.Priority)
+
+	case "ytdlp":
+		var d ytdlp.Download
+
+		err := json.Unmarshal(download.Data, &d)
+		if err != nil {
+			return nil, err
+		}
+
+		if d.Status == status.Active {
+			d.Status = status.Paused
+		}
+
+		return ytdlp.New(ctx, cfg.Ytdlp, d.URL, &d, repo, d.Priority)
 
 	default:
 		return nil, ErrUnsupportedScheme

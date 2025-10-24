@@ -23,6 +23,7 @@ const (
 	disableTrackers                  = false
 	disableIPv6                      = false
 	metainfoTimeout                  = 60 * time.Second
+	ytdlpBinary                      = "yt-dlp"
 )
 
 var (

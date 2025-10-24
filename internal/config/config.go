@@ -17,6 +17,7 @@ type Config struct {
 	MaxConcurrentDownloads int            `yaml:"maxConcurrentDownloads,omitempty"`
 	Http                   *HttpConfig    `yaml:"http,omitempty"`
 	Torrent                *TorrentConfig `yaml:"torrent,omitempty"`
+	Ytdlp                  *YTDLPConfig   `yaml:"ytdlp,omitempty"`
 }
 
 // HttpConfig holds configuration options for HTTP downloads.
@@ -51,6 +52,18 @@ func (h *HttpConfig) IsConfig() bool {
 	return true
 }
 
+// YTDLPConfig holds configuration options for yt-dlp downloads.
+type YTDLPConfig struct {
+	DownloadDir string   `yaml:"dir,omitempty"`
+	BinaryPath  string   `yaml:"binaryPath,omitempty"`
+	Format      string   `yaml:"format,omitempty"`
+	Args        []string `yaml:"args,omitempty"`
+}
+
+func (y *YTDLPConfig) IsConfig() bool {
+	return true
+}
+
 // GetConfig reads the configuration file and returns a Config struct.
 // If the configuration file does not exist, it returns the default configuration.
 func GetConfig() (*Config, error) {
@@ -79,6 +92,7 @@ func GetConfig() (*Config, error) {
 
 	httpCfg := zeroOr(cfg.Http, defaults.Http)
 	torrentCfg := zeroOr(cfg.Torrent, defaults.Torrent)
+	ytdlpCfg := zeroOr(cfg.Ytdlp, defaults.Ytdlp)
 
 	return &Config{
 		MaxConcurrentDownloads: zeroOr(cfg.MaxConcurrentDownloads, defaults.MaxConcurrentDownloads),
@@ -101,6 +115,12 @@ func GetConfig() (*Config, error) {
 			DisableTrackers:                  zeroOr(torrentCfg.DisableTrackers, defaults.Torrent.DisableTrackers),
 			DisableIPv6:                      zeroOr(torrentCfg.DisableIPv6, defaults.Torrent.DisableIPv6),
 			MetainfoTimeout:                  zeroOr(torrentCfg.MetainfoTimeout, defaults.Torrent.MetainfoTimeout),
+		},
+		Ytdlp: &YTDLPConfig{
+			DownloadDir: zeroOr(ytdlpCfg.DownloadDir, defaults.Ytdlp.DownloadDir),
+			BinaryPath:  zeroOr(ytdlpCfg.BinaryPath, defaults.Ytdlp.BinaryPath),
+			Format:      zeroOr(ytdlpCfg.Format, defaults.Ytdlp.Format),
+			Args:        zeroOr(ytdlpCfg.Args, defaults.Ytdlp.Args),
 		},
 	}, nil
 }
@@ -127,6 +147,12 @@ func DefaultConfig() Config {
 			DisableTrackers:                  disableTrackers,
 			DisableIPv6:                      disableIPv6,
 			MetainfoTimeout:                  metainfoTimeout,
+		},
+		Ytdlp: &YTDLPConfig{
+			DownloadDir: downloadDir,
+			BinaryPath:  ytdlpBinary,
+			Format:      "",
+			Args:        nil,
 		},
 	}
 }
