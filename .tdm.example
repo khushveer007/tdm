@@ -25,3 +25,9 @@ torrent:
   disableIPv6: false                   # Disable IPv6
   metainfoTimeout: 60s                 # Timeout for torrent metainfo (Go duration string)
 
+ytdlp:
+  dir: "${XDG_DOWNLOAD_DIR}"           # Download directory for yt-dlp downloads
+  binaryPath: "yt-dlp"                 # Path to the yt-dlp executable
+  format: ""                           # Optional format selector passed to yt-dlp (-f)
+  args: []                             # Extra arguments passed to yt-dlp
+
