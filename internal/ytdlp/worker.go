@@ -51,8 +51,14 @@ type Worker struct {
 	lastProgress progress.Progress
 }
 
+// Options control additional behaviour for yt-dlp workers.
+type Options struct {
+	// Format specifies the yt-dlp format identifier to download.
+	Format string
+}
+
 // New creates a new yt-dlp worker.
-func New(_ context.Context, cfg *config.YTDLPConfig, url string, downloadData *Download, repo *repository.BboltRepository, priority int) (*Worker, error) {
+func New(_ context.Context, cfg *config.YTDLPConfig, url string, downloadData *Download, repo *repository.BboltRepository, priority int, opts *Options) (*Worker, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("ytdlp config is required")
 	}
@@ -66,6 +72,9 @@ func New(_ context.Context, cfg *config.YTDLPConfig, url string, downloadData *D
 		if downloadData.getDir() == "" {
 			downloadData.Dir = cfg.DownloadDir
 		}
+		if opts != nil && opts.Format != "" {
+			downloadData.setFormat(opts.Format)
+		}
 		download = downloadData
 	} else {
 		dir := cfg.DownloadDir
@@ -73,7 +82,12 @@ func New(_ context.Context, cfg *config.YTDLPConfig, url string, downloadData *D
 			dir = os.TempDir()
 		}
 
-		download = NewDownload(url, dir, priority)
+		format := ""
+		if opts != nil {
+			format = opts.Format
+		}
+
+		download = NewDownload(url, dir, priority, format)
 	}
 
 	if download.getPriority() != priority {
@@ -236,7 +250,12 @@ func (w *Worker) execute(ctx context.Context) error {
 	}
 
 	args := []string{"--newline", "--no-playlist", "-o", filepath.Join(dir, "%(title)s.%(ext)s")}
-	if format := strings.TrimSpace(w.cfg.Format); format != "" {
+	format := strings.TrimSpace(w.download.getFormat())
+	if format == "" {
+		format = strings.TrimSpace(w.cfg.Format)
+	}
+
+	if format != "" {
 		args = append(args, "-f", format)
 	}
 

@@ -39,7 +39,7 @@ type Worker interface {
 }
 
 // GetWorker returns a worker based on the URL scheme.
-func GetWorker(ctx context.Context, cfg *config.Config, urlStr string, priority int, torrentClient *torrentPkg.Client, repo *repository.BboltRepository) (Worker, error) {
+func GetWorker(ctx context.Context, cfg *config.Config, urlStr string, priority int, torrentClient *torrentPkg.Client, repo *repository.BboltRepository, format string) (Worker, error) {
 	if repo == nil {
 		return nil, ErrNilRepository
 	}
@@ -56,7 +56,7 @@ func GetWorker(ctx context.Context, cfg *config.Config, urlStr string, priority 
 		}
 
 		if cfg.Ytdlp != nil && ytdlp.CanHandle(urlStr) {
-			return ytdlp.New(ctx, cfg.Ytdlp, urlStr, nil, repo, priority)
+			return ytdlp.New(ctx, cfg.Ytdlp, urlStr, nil, repo, priority, &ytdlp.Options{Format: format})
 		}
 
 		if http.CanHandle(urlStr) {
@@ -114,7 +114,7 @@ func LoadWorker(ctx context.Context, cfg *config.Config, download repository.Obj
 			d.Status = status.Paused
 		}
 
-		return ytdlp.New(ctx, cfg.Ytdlp, d.URL, &d, repo, d.Priority)
+		return ytdlp.New(ctx, cfg.Ytdlp, d.URL, &d, repo, d.Priority, &ytdlp.Options{Format: d.Format})
 
 	default:
 		return nil, ErrUnsupportedScheme

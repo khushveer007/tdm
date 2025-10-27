@@ -254,7 +254,7 @@ func (s *EngineTestSuite) TestEngine_AddDownload() {
 
 	for _, tc := range testCases {
 		s.Run(tc.name, func() {
-			id := s.engine.AddDownload(s.ctx, tc.url, tc.priority)
+                        id := s.engine.AddDownload(s.ctx, tc.url, tc.priority, "")
 
 			if tc.expectError {
 				assert.Equal(s.T(), uuid.Nil, id, "should return nil UUID for error case")
@@ -287,7 +287,7 @@ func (s *EngineTestSuite) TestEngine_AddDownload() {
 
 func (s *EngineTestSuite) TestEngine_PauseDownload() {
 	s.Run("pause existing download", func() {
-		id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5)
+            id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5, "")
 		s.requireValidDownloadID(id, "failed to add download")
 
 		s.engine.PauseDownload(s.ctx, id)
@@ -304,7 +304,7 @@ func (s *EngineTestSuite) TestEngine_PauseDownload() {
 
 func (s *EngineTestSuite) TestEngine_ResumeDownload() {
 	s.Run("resume paused download", func() {
-		id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5)
+            id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5, "")
 		s.requireValidDownloadID(id, "failed to add download")
 
 		s.engine.PauseDownload(s.ctx, id)
@@ -323,7 +323,7 @@ func (s *EngineTestSuite) TestEngine_ResumeDownload() {
 
 func (s *EngineTestSuite) TestEngine_CancelDownload() {
 	s.Run("cancel existing download", func() {
-		id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5)
+            id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5, "")
 		s.requireValidDownloadID(id, "failed to add download")
 
 		s.engine.CancelDownload(s.ctx, id)
@@ -340,7 +340,7 @@ func (s *EngineTestSuite) TestEngine_CancelDownload() {
 
 func (s *EngineTestSuite) TestEngine_RemoveDownload() {
 	s.Run("remove existing download", func() {
-		id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5)
+            id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5, "")
 		s.requireValidDownloadID(id, "failed to add download")
 
 		initialCount := len(s.engine.GetAllDownloads())
@@ -364,7 +364,7 @@ func (s *EngineTestSuite) TestEngine_RemoveDownload() {
 
 func (s *EngineTestSuite) TestEngine_GetProgress() {
 	s.Run("get progress for existing download", func() {
-		id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5)
+            id := s.engine.AddDownload(s.ctx, s.server.URL+"/file.zip", 5, "")
 		s.requireValidDownloadID(id, "failed to add download")
 
 		progress, err := s.engine.GetProgress(id)
@@ -390,7 +390,7 @@ func (s *EngineTestSuite) TestEngine_GetAllDownloads() {
 
 	for i, priority := range priorities {
 		url := fmt.Sprintf("%s/file%d.zip", s.server.URL, i)
-		id := s.engine.AddDownload(s.ctx, url, priority)
+            id := s.engine.AddDownload(s.ctx, url, priority, "")
 		if id != uuid.Nil {
 			addedIDs = append(addedIDs, id)
 		}
@@ -429,7 +429,7 @@ func (s *EngineTestSuite) TestEngine_ConcurrentOperations() {
 		go func(idx int) {
 			defer wg.Done()
 			url := fmt.Sprintf("%s/file%d.zip", s.server.URL, idx)
-			id := s.engine.AddDownload(s.ctx, url, (idx%5)+1)
+                    id := s.engine.AddDownload(s.ctx, url, (idx%5)+1, "")
 			select {
 			case addResults <- id:
 			case <-s.ctx.Done():
@@ -514,7 +514,7 @@ func (s *EngineTestSuite) TestEngine_ConcurrentOperations() {
 
 func (s *EngineTestSuite) TestEngine_ErrorHandling() {
 	s.Run("invalid download URL", func() {
-		id := s.engine.AddDownload(s.ctx, "invalid-url", 5)
+            id := s.engine.AddDownload(s.ctx, "invalid-url", 5, "")
 		assert.Equal(s.T(), uuid.Nil, id, "should return nil UUID for invalid URL")
 
 		downloadErr := s.waitForError(2 * time.Second)

@@ -20,6 +20,8 @@ type Download struct {
 	URL  string    `json:"url"`
 	Dir  string    `json:"dir"`
 	Path string    `json:"path"`
+	// Format holds the specific yt-dlp format identifier for this download.
+	Format string `json:"format,omitempty"`
 
 	Status     status.Status `json:"status"`
 	Priority   int           `json:"priority"`
@@ -31,13 +33,14 @@ type Download struct {
 }
 
 // NewDownload creates a new yt-dlp download metadata entry.
-func NewDownload(url, dir string, priority int) *Download {
+func NewDownload(url, dir string, priority int, format string) *Download {
 	now := time.Now()
 
 	return &Download{
 		ID:        uuid.New(),
 		URL:       url,
 		Dir:       dir,
+		Format:    format,
 		Status:    status.Pending,
 		Priority:  priority,
 		CreatedAt: now,
@@ -52,6 +55,7 @@ func (d *Download) MarshalJSON() ([]byte, error) {
 		URL        string        `json:"url"`
 		Dir        string        `json:"dir"`
 		Path       string        `json:"path"`
+		Format     string        `json:"format,omitempty"`
 		Status     status.Status `json:"status"`
 		Priority   int           `json:"priority"`
 		TotalSize  int64         `json:"totalSize"`
@@ -66,6 +70,7 @@ func (d *Download) MarshalJSON() ([]byte, error) {
 		URL:       d.URL,
 		Dir:       d.Dir,
 		Path:      d.Path,
+		Format:    d.Format,
 		Priority:  d.Priority,
 		CreatedAt: d.CreatedAt,
 		UpdatedAt: d.UpdatedAt,
@@ -128,6 +133,21 @@ func (d *Download) getFilename() string {
 	}
 
 	return filepath.Base(path)
+}
+
+func (d *Download) setFormat(format string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.Format = format
+	d.touchLocked()
+}
+
+func (d *Download) getFormat() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	return d.Format
 }
 
 func (d *Download) setStatus(s status.Status) {

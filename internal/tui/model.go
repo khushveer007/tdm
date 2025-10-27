@@ -19,6 +19,7 @@ import (
 	"github.com/NamanBalaji/tdm/internal/engine"
 	"github.com/NamanBalaji/tdm/internal/tui/components"
 	"github.com/NamanBalaji/tdm/internal/tui/styles"
+	"github.com/NamanBalaji/tdm/internal/ytdlp"
 )
 
 type currentView int
@@ -31,6 +32,7 @@ var (
 const (
 	viewList currentView = iota
 	viewAdd
+	viewSelectFormat
 	viewConfirmRemove
 	viewConfirmCancel
 )
@@ -47,6 +49,14 @@ type Model struct {
 	spinner       spinner.Model
 	help          help.Model
 	keys          keyMap
+
+	formatOptions   []ytdlp.Format
+	formatSelected  int
+	formatLoading   bool
+	pendingURL      string
+	pendingPriority int
+	formatFetchID   int
+	activeFetchID   int
 
 	width, height int
 	errMsg        string
@@ -65,6 +75,11 @@ type (
 	tickMsg       struct{}
 	downloadsMsg  []engine.DownloadInfo
 	downloadError struct{ error }
+	formatsMsg    struct {
+		formats   []ytdlp.Format
+		err       error
+		requestID int
+	}
 )
 
 func clearNotifications() tea.Cmd {
@@ -166,6 +181,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, nil
 
+	case formatsMsg:
+		if msg.requestID == 0 || msg.requestID != m.activeFetchID {
+			return m, nil
+		}
+
+		m.activeFetchID = 0
+		m.formatLoading = false
+		if msg.err != nil {
+			m.errMsg = fmt.Sprintf("Failed to fetch formats: %v", msg.err)
+			m.view = viewAdd
+
+			return m, clearNotifications()
+		}
+
+		if len(msg.formats) == 0 {
+			return m, m.finalizeAdd("")
+		}
+
+		m.formatOptions = prependDefaultFormat(msg.formats)
+		if m.formatSelected >= len(m.formatOptions) {
+			m.formatSelected = 0
+		}
+
+		return m, nil
+
 	case downloadError:
 		m.errMsg = msg.Error()
 		return m, clearNotifications()
@@ -192,6 +232,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.updateListView(msg)
 	case viewAdd:
 		cmd = m.updateAddView(msg)
+	case viewSelectFormat:
+		cmd = m.updateSelectFormatView(msg)
 	case viewConfirmRemove:
 		cmd = m.updateConfirmRemoveView(msg)
 	case viewConfirmCancel:
@@ -226,6 +268,8 @@ func (m *Model) View() string {
 			mainContent = components.RenderDownloadList(m.list.downloads, m.list.selected, m.width, remainingHeight)
 		case viewAdd:
 			mainContent = m.renderAddView(remainingHeight)
+		case viewSelectFormat:
+			mainContent = m.renderSelectFormatView(remainingHeight)
 		case viewConfirmRemove:
 			mainContent = m.renderConfirmDialog("Are you sure you want to remove this download? (y/n)", remainingHeight)
 		case viewConfirmCancel:
@@ -262,6 +306,48 @@ func (m *Model) renderAddView(height int) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.Pink).
 		Padding(1, 2).
+		Render(b.String())
+
+	return lipgloss.Place(m.width, height, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+func (m *Model) renderSelectFormatView(height int) string {
+	var b strings.Builder
+
+	title := lipgloss.NewStyle().Bold(true).Foreground(styles.Pink).Render("Select Video Format")
+	b.WriteString(title)
+
+	if m.pendingURL != "" {
+		urlStyle := lipgloss.NewStyle().Foreground(styles.Subtext0)
+		b.WriteString("\n" + urlStyle.Render(m.pendingURL))
+	}
+
+	if m.formatLoading {
+		b.WriteString("\n\n" + fmt.Sprintf("%s Fetching available formats...", m.spinner.View()))
+	} else if len(m.formatOptions) == 0 {
+		b.WriteString("\n\nNo formats available. The default yt-dlp behaviour will be used.")
+	} else {
+		b.WriteString("\n\nUse ↑/↓ to choose a format, enter to confirm, esc to cancel.\n\n")
+
+		for i, option := range m.formatOptions {
+			label := formatOptionLabel(option)
+			if i == m.formatSelected {
+				b.WriteString(styles.SelectedItemStyle.Render(label))
+			} else {
+				b.WriteString(styles.ListItemStyle.Render(label))
+			}
+
+			if i < len(m.formatOptions)-1 {
+				b.WriteString("\n")
+			}
+		}
+	}
+
+	dialog := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(styles.Pink).
+		Padding(1, 2).
+		Width(m.width - 4).
 		Render(b.String())
 
 	return lipgloss.Place(m.width, height, lipgloss.Center, lipgloss.Center, dialog)
@@ -407,7 +493,8 @@ func (m *Model) updateAddView(msg tea.Msg) tea.Cmd {
 			}
 
 		case key.Matches(msg, m.keys.Confirm):
-			if m.urlInput.Value() != "" {
+			url := strings.TrimSpace(m.urlInput.Value())
+			if url != "" {
 				priority := 5 // Default priority
 
 				if m.priorityInput.Value() != "" {
@@ -415,19 +502,24 @@ func (m *Model) updateAddView(msg tea.Msg) tea.Cmd {
 					priority = p
 				}
 
-				url := m.urlInput.Value()
+				m.pendingURL = url
+				m.pendingPriority = priority
 
-				go func() {
-					m.actions.Add(url, priority)
-				}()
+				if ytdlp.CanHandle(url) && m.actions.FetchFormats != nil {
+					m.formatOptions = nil
+					m.formatSelected = 0
+					m.formatLoading = true
+					m.formatFetchID++
+					fetchID := m.formatFetchID
+					m.activeFetchID = fetchID
+					m.view = viewSelectFormat
+					m.urlInput.Blur()
+					m.priorityInput.Blur()
 
-				m.successMsg = "Added download for: " + url
-				m.view = viewList
-				m.urlInput.SetValue("")
-				m.priorityInput.SetValue("")
-				m.addFormFocusIndex = 0
+					return tea.Batch(m.fetchFormats(url, fetchID))
+				}
 
-				return clearNotifications()
+				return m.finalizeAdd("")
 			}
 
 		case key.Matches(msg, m.keys.Back):
@@ -490,4 +582,173 @@ func (m *Model) updateConfirmCancelView(msg tea.Msg) tea.Cmd {
 	}
 
 	return nil
+}
+
+func (m *Model) updateSelectFormatView(msg tea.Msg) tea.Cmd {
+	if m.formatLoading {
+		if _, ok := msg.(tea.KeyMsg); ok {
+			// Ignore key inputs while loading.
+			return nil
+		}
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, m.keys.Up):
+			if m.formatSelected > 0 {
+				m.formatSelected--
+			}
+		case key.Matches(msg, m.keys.Down):
+			if m.formatSelected < len(m.formatOptions)-1 {
+				m.formatSelected++
+			}
+		case key.Matches(msg, m.keys.Confirm):
+			if m.formatLoading {
+				return nil
+			}
+
+			formatID := ""
+			if len(m.formatOptions) > 0 && m.formatSelected >= 0 && m.formatSelected < len(m.formatOptions) {
+				formatID = m.formatOptions[m.formatSelected].ID
+			}
+
+			return m.finalizeAdd(formatID)
+		case key.Matches(msg, m.keys.Back):
+			m.view = viewAdd
+			m.formatOptions = nil
+			m.formatSelected = 0
+			m.formatLoading = false
+			m.activeFetchID = 0
+			m.urlInput.Focus()
+
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func (m *Model) fetchFormats(url string, requestID int) tea.Cmd {
+	if m.actions.FetchFormats == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		formats, err := m.actions.FetchFormats(url)
+		return formatsMsg{formats: formats, err: err, requestID: requestID}
+	}
+}
+
+func (m *Model) finalizeAdd(format string) tea.Cmd {
+	url := strings.TrimSpace(m.pendingURL)
+	if url == "" {
+		url = strings.TrimSpace(m.urlInput.Value())
+	}
+
+	if url == "" {
+		return nil
+	}
+
+	priority := m.pendingPriority
+	if priority == 0 {
+		if val := strings.TrimSpace(m.priorityInput.Value()); val != "" {
+			if parsed, err := strconv.Atoi(val); err == nil {
+				priority = parsed
+			}
+		}
+	}
+
+	if priority < 1 || priority > 10 {
+		priority = 5
+	}
+
+	go func(u string, p int, f string) {
+		m.actions.Add(u, p, f)
+	}(url, priority, format)
+
+	m.successMsg = "Added download for: " + url
+	m.view = viewList
+	m.urlInput.SetValue("")
+	m.priorityInput.SetValue("")
+	m.urlInput.Focus()
+	m.addFormFocusIndex = 0
+	m.pendingURL = ""
+	m.pendingPriority = 0
+	m.formatOptions = nil
+	m.formatSelected = 0
+	m.formatLoading = false
+	m.activeFetchID = 0
+
+	return clearNotifications()
+}
+
+func prependDefaultFormat(formats []ytdlp.Format) []ytdlp.Format {
+	result := make([]ytdlp.Format, 0, len(formats)+1)
+	result = append(result, ytdlp.Format{ID: "", FormatNote: "Best available"})
+	result = append(result, formats...)
+
+	return result
+}
+
+func formatOptionLabel(f ytdlp.Format) string {
+	if strings.TrimSpace(f.ID) == "" {
+		return "Best available (yt-dlp default)"
+	}
+
+	parts := []string{f.ID}
+	if ext := strings.TrimSpace(f.Extension); ext != "" {
+		parts = append(parts, ext)
+	}
+
+	if res := strings.TrimSpace(f.Resolution); res != "" {
+		parts = append(parts, res)
+	}
+
+	if note := strings.TrimSpace(f.FormatNote); note != "" {
+		parts = append(parts, note)
+	}
+
+	if size := formatBytes(f.Filesize); size != "" {
+		parts = append(parts, "~"+size)
+	}
+
+	codecParts := make([]string, 0, 2)
+	if vc := strings.TrimSpace(f.VideoCodec); vc != "" && vc != "none" {
+		codecParts = append(codecParts, vc)
+	}
+	if ac := strings.TrimSpace(f.AudioCodec); ac != "" && ac != "none" {
+		codecParts = append(codecParts, "audio:"+ac)
+	}
+
+	if len(codecParts) > 0 {
+		parts = append(parts, strings.Join(codecParts, ", "))
+	}
+
+	if f.AverageBitrate > 0 {
+		parts = append(parts, fmt.Sprintf("%.0f kbps", f.AverageBitrate))
+	}
+
+	return strings.Join(parts, " | ")
+}
+
+func formatBytes(bytes int64) string {
+	if bytes <= 0 {
+		return ""
+	}
+
+	const unit = 1024.0
+	value := float64(bytes)
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
+	idx := 0
+	for value >= unit && idx < len(units)-1 {
+		value /= unit
+		idx++
+	}
+
+	if value >= 10 || idx == 0 {
+		return fmt.Sprintf("%.0f %s", value, units[idx])
+	}
+
+	return fmt.Sprintf("%.1f %s", value, units[idx])
 }
