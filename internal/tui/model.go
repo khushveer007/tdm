@@ -55,6 +55,8 @@ type Model struct {
 	formatLoading   bool
 	pendingURL      string
 	pendingPriority int
+	formatFetchID   int
+	activeFetchID   int
 
 	width, height int
 	errMsg        string
@@ -74,8 +76,9 @@ type (
 	downloadsMsg  []engine.DownloadInfo
 	downloadError struct{ error }
 	formatsMsg    struct {
-		formats []ytdlp.Format
-		err     error
+		formats   []ytdlp.Format
+		err       error
+		requestID int
 	}
 )
 
@@ -179,6 +182,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case formatsMsg:
+		if msg.requestID == 0 || msg.requestID != m.activeFetchID {
+			return m, nil
+		}
+
+		m.activeFetchID = 0
 		m.formatLoading = false
 		if msg.err != nil {
 			m.errMsg = fmt.Sprintf("Failed to fetch formats: %v", msg.err)
@@ -501,11 +509,14 @@ func (m *Model) updateAddView(msg tea.Msg) tea.Cmd {
 					m.formatOptions = nil
 					m.formatSelected = 0
 					m.formatLoading = true
+					m.formatFetchID++
+					fetchID := m.formatFetchID
+					m.activeFetchID = fetchID
 					m.view = viewSelectFormat
 					m.urlInput.Blur()
 					m.priorityInput.Blur()
 
-					return tea.Batch(m.fetchFormats(url))
+					return tea.Batch(m.fetchFormats(url, fetchID))
 				}
 
 				return m.finalizeAdd("")
@@ -608,6 +619,7 @@ func (m *Model) updateSelectFormatView(msg tea.Msg) tea.Cmd {
 			m.formatOptions = nil
 			m.formatSelected = 0
 			m.formatLoading = false
+			m.activeFetchID = 0
 			m.urlInput.Focus()
 
 			return nil
@@ -617,14 +629,14 @@ func (m *Model) updateSelectFormatView(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) fetchFormats(url string) tea.Cmd {
+func (m *Model) fetchFormats(url string, requestID int) tea.Cmd {
 	if m.actions.FetchFormats == nil {
 		return nil
 	}
 
 	return func() tea.Msg {
 		formats, err := m.actions.FetchFormats(url)
-		return formatsMsg{formats: formats, err: err}
+		return formatsMsg{formats: formats, err: err, requestID: requestID}
 	}
 }
 
@@ -666,6 +678,7 @@ func (m *Model) finalizeAdd(format string) tea.Cmd {
 	m.formatOptions = nil
 	m.formatSelected = 0
 	m.formatLoading = false
+	m.activeFetchID = 0
 
 	return clearNotifications()
 }
