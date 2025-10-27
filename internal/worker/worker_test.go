@@ -157,7 +157,7 @@ func TestGetWorker(t *testing.T) {
 			ctx := context.Background()
 			cfg := config.DefaultConfig()
 
-			w, err := worker.GetWorker(ctx, &cfg, tt.url, tt.priority, torrentClient, repo)
+                    w, err := worker.GetWorker(ctx, &cfg, tt.url, tt.priority, torrentClient, repo, "")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -212,7 +212,7 @@ func TestGetWorker_EdgeCases(t *testing.T) {
 			ctx := context.Background()
 			cfg := config.DefaultConfig()
 
-			w, err := worker.GetWorker(ctx, &cfg, tt.url, 1, nil, repo)
+                    w, err := worker.GetWorker(ctx, &cfg, tt.url, 1, nil, repo, "")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -422,7 +422,7 @@ func TestGetWorker_NilInputs(t *testing.T) {
 				}
 			}()
 
-			w, err := worker.GetWorker(tt.ctx, tt.cfg, tt.url, 1, nil, tt.repo)
+                    w, err := worker.GetWorker(tt.ctx, tt.cfg, tt.url, 1, nil, tt.repo, "")
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Nil(t, w)

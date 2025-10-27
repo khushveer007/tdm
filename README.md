@@ -22,6 +22,14 @@ TDM is a cross-platform, multi protocol fast and lightweight download manager th
 - Priority based download queueing system
 - Pause, resume, cancel, and delete for all downloads
 - Comprehensive download status tracking
+- Interactive format and quality selection for YouTube downloads
+
+### YouTube Downloads
+
+Paste a YouTube link into the add download dialog and TDM will fetch the
+available formats using `yt-dlp`. You can then pick the exact combination of
+video quality and format before the download starts. If the format list cannot
+be retrieved, the default `yt-dlp` behaviour is used.
 
 ## 🛠️ Installation
 

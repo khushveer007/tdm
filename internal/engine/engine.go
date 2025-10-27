@@ -16,6 +16,7 @@ import (
 	"github.com/NamanBalaji/tdm/internal/repository"
 	"github.com/NamanBalaji/tdm/internal/status"
 	"github.com/NamanBalaji/tdm/internal/worker"
+	"github.com/NamanBalaji/tdm/internal/ytdlp"
 	torrentPkg "github.com/NamanBalaji/tdm/pkg/torrent"
 )
 
@@ -80,14 +81,14 @@ func (e *Engine) Start(ctx context.Context) error {
 }
 
 // AddDownload adds a new download to the engine.
-func (e *Engine) AddDownload(ctx context.Context, url string, priority int) uuid.UUID {
+func (e *Engine) AddDownload(ctx context.Context, url string, priority int, format string) uuid.UUID {
 	if priority < 1 || priority > 10 {
 		e.errors <- DownloadError{ID: uuid.Nil, Error: ErrInvalidPriority}
 
 		return uuid.Nil
 	}
 
-	w, err := worker.GetWorker(ctx, e.cfg, url, priority, e.torrentClient, e.repo)
+	w, err := worker.GetWorker(ctx, e.cfg, url, priority, e.torrentClient, e.repo, format)
 	if err != nil {
 		e.errors <- DownloadError{ID: uuid.Nil, Error: err}
 
@@ -104,6 +105,19 @@ func (e *Engine) AddDownload(ctx context.Context, url string, priority int) uuid
 	go e.monitorWorker(ctx, w)
 
 	return id
+}
+
+// ListFormats returns the available formats for a supported media URL.
+func (e *Engine) ListFormats(ctx context.Context, url string) ([]ytdlp.Format, error) {
+	if e.cfg.Ytdlp == nil {
+		return nil, fmt.Errorf("yt-dlp integration is not configured")
+	}
+
+	if !ytdlp.CanHandle(url) {
+		return nil, fmt.Errorf("format selection is available only for supported media URLs")
+	}
+
+	return ytdlp.ListFormats(ctx, e.cfg.Ytdlp, url)
 }
 
 // PauseDownload pauses a download.
